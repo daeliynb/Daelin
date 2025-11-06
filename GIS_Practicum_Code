@@ -1,0 +1,183 @@
+import arcpy, os, datetime, random
+from arcpy.sa import *
+
+gdb = r"C:\ARCGIS-TMP\nnnn_8f1dfe\commondata\myproject16.gdb"
+
+hawaiiana_fc   = f"{gdb}\\H_hawaiiana_start"
+decipiens_fc   = f"{gdb}\\H_decipiens_start"
+hawaiiana_mask = f"{gdb}\\hawaiiana_mask"
+decipiens_mask = f"{gdb}\\decipiens_mask"
+bay_fc         = f"{gdb}\\BayBoundary"
+out_history    = f"{gdb}\\Seagrass_Growth"
+
+# Growth values
+# Converted from weekly edge-growth to monthly (×4.345 weeks/month)
+GROW_HH = 0.14818188   # H. hawaiiana edge-growth (m/month)
+GROW_HD = 0.5322625    # H. decipiens edge-growth (m/month)
+GRAZE   = 0.86         # uniform grazing multiplier per month for hawaiiana (14% reduction)
+
+# Overlap
+PREF_HD = 0.65         # 65% of overlap goes to decipiens
+CELL    = 0.5          # cell size (m) for allocation
+SEED    = 12345
+random.seed(SEED)
+
+# Runtime
+YEARS       = 5
+MONTHS      = YEARS * 12          # 60 months
+START_DATE  = datetime.date(2025, 1, 1)
+
+TMP = "in_memory"
+
+arcpy.env.workspace = gdb
+arcpy.env.overwriteOutput = True
+arcpy.env.addOutputsToMap = False
+arcpy.CheckOutExtension("Spatial")
+
+def u(name, ws=TMP): 
+    return arcpy.CreateUniqueName(name, ws)
+
+# Add months correctly
+def add_months(d: datetime.date, n: int) -> datetime.date:
+    y = d.year + (d.month - 1 + n) // 12
+    m = (d.month - 1 + n) % 12 + 1
+    # clamp day
+    last_day = [31,
+                29 if (y % 400 == 0 or (y % 4 == 0 and y % 100 != 0)) else 28,
+                31,30,31,30,31,31,30,31,30,31][m-1]
+    day = min(d.day, last_day)
+    return datetime.date(y, m, day)
+
+# Creates polygons for each month
+def create_history_fc(template_fc, out_fc):
+    if arcpy.Exists(out_fc):
+        arcpy.management.Delete(out_fc)
+    sr = arcpy.Describe(template_fc).spatialReference
+    arcpy.management.CreateFeatureclass(os.path.dirname(out_fc),
+                                        os.path.basename(out_fc),
+                                        "POLYGON",
+                                        spatial_reference=sr)
+    for fld, ftype in [("Species","TEXT"),("Month","LONG"),("Date","DATE"),("UID","LONG")]:
+        if fld not in [f.name for f in arcpy.ListFields(out_fc)]:
+            arcpy.management.AddField(out_fc, fld, ftype)
+    return out_fc
+
+def append_with_attrs(fc_in, species, month_idx, date_obj, dest_fc):
+    tmp = arcpy.management.CopyFeatures(fc_in, u(f"{species}_m{month_idx}"))
+    for fld, ftype in [("Species","TEXT"),("Month","LONG"),("Date","DATE")]:
+        if fld not in [f.name for f in arcpy.ListFields(tmp)]:
+            arcpy.management.AddField(tmp, fld, ftype)
+    arcpy.management.CalculateField(tmp, "Species", f"'{species}'", "PYTHON3")
+    arcpy.management.CalculateField(tmp, "Month", month_idx, "PYTHON3")
+    with arcpy.da.UpdateCursor(tmp, ["Date"]) as cur:
+        for row in cur:
+            row[0] = date_obj
+            cur.updateRow(row)
+    if "UID" in [f.name for f in arcpy.ListFields(dest_fc)] and "OBJECTID" in [f.name for f in arcpy.ListFields(tmp)]:
+        arcpy.management.CalculateField(tmp, "UID", "!OBJECTID!", "PYTHON3")
+    arcpy.management.Append(tmp, dest_fc, "NO_TEST")
+    arcpy.management.Delete(tmp)
+
+def grow_with_mask(cur_fc, buf_m, mask_fc, bay_fc, tag):
+    dis   = arcpy.management.Dissolve(cur_fc, u(f"{tag}_dis"))
+    buf   = arcpy.analysis.Buffer(dis, u(f"{tag}_buf"), f"{buf_m} Meters", dissolve_option="ALL")
+    mask  = arcpy.analysis.Intersect([buf, mask_fc], u(f"{tag}_mask"))
+    baycl = arcpy.analysis.Clip(mask, bay_fc, u(f"{tag}_bay"))
+    for ds in [dis, buf, mask]:
+        if arcpy.Exists(ds): arcpy.management.Delete(ds)
+    return baycl
+
+def fishnet_split_overlap(overlap_fc, step_idx):
+    ext = arcpy.Describe(overlap_fc).extent
+    origin = f"{ext.XMin} {ext.YMin}"
+    yaxis  = f"{ext.XMin} {ext.YMin + 1}"
+    corner = f"{ext.XMax} {ext.YMax}"
+
+    fish = u(f"fish_{step_idx}")
+    arcpy.management.CreateFishnet(fish, origin, yaxis, CELL, CELL, 0, 0,
+                                   corner_coord=corner, geometry_type="POLYGON")
+    fish_clip = arcpy.analysis.Clip(fish, overlap_fc, u(f"fish_clip_{step_idx}"))
+    arcpy.management.Delete(fish)
+
+    arcpy.management.AddField(fish_clip, "r", "DOUBLE")
+    with arcpy.da.UpdateCursor(fish_clip, ["r"]) as cur:
+        for row in cur:
+            row[0] = random.random()
+            cur.updateRow(row)
+
+    hd_sel = u(f"hd_sel_{step_idx}")
+    hh_sel = u(f"hh_sel_{step_idx}")
+    arcpy.management.MakeFeatureLayer(fish_clip, hd_sel, f"r <= {PREF_HD}")
+    arcpy.management.MakeFeatureLayer(fish_clip, hh_sel, f"r > {PREF_HD}")
+
+    hd_dis   = arcpy.management.Dissolve(hd_sel, u(f"hd_dis_{step_idx}"))
+    hh_dis   = arcpy.management.Dissolve(hh_sel, u(f"hh_dis_{step_idx}"))
+    hd_share = arcpy.analysis.Clip(hd_dis, overlap_fc, u(f"hd_share_{step_idx}"))
+    hh_share = arcpy.analysis.Clip(hh_dis, overlap_fc, u(f"hh_share_{step_idx}"))
+
+    for ds in [fish_clip, hd_sel, hh_sel, hd_dis, hh_dis]:
+        if arcpy.Exists(ds): arcpy.management.Delete(ds)
+    return hd_share, hh_share
+
+def resolve_overlap(hh_fc, hd_fc, step_idx):
+    hh_dis = arcpy.management.Dissolve(hh_fc, u(f"hh_dis_{step_idx}"))
+    hd_dis = arcpy.management.Dissolve(hd_fc, u(f"hd_dis_{step_idx}"))
+    hh_excl = arcpy.analysis.Erase(hh_dis, hd_dis, u(f"hh_excl_{step_idx}"))
+    hd_excl = arcpy.analysis.Erase(hd_dis, hh_dis, u(f"hd_excl_{step_idx}"))
+    overlap = arcpy.analysis.Intersect([hh_dis, hd_dis], u(f"ov_{step_idx}"))
+    arcpy.management.Delete(hh_dis); arcpy.management.Delete(hd_dis)
+
+    if int(arcpy.management.GetCount(overlap)[0]) == 0:
+        hh_fin, hd_fin = hh_excl, hd_excl
+    else:
+        hd_share, hh_share = fishnet_split_overlap(overlap, step_idx)
+        hd_merge = arcpy.management.Merge([hd_excl, hd_share], u(f"hd_merge_{step_idx}"))
+        hh_merge = arcpy.management.Merge([hh_excl, hh_share], u(f"hh_merge_{step_idx}"))
+        hd_noov  = arcpy.analysis.Erase(hd_merge, hh_merge, u(f"hd_noov_{step_idx}"))
+        hh_noov  = arcpy.analysis.Erase(hh_merge, hd_merge, u(f"hh_noov_{step_idx}"))
+        hd_fin   = arcpy.management.Dissolve(hd_noov, u(f"hd_fin_{step_idx}"))
+        hh_fin   = arcpy.management.Dissolve(hh_noov, u(f"hh_fin_{step_idx}"))
+        for ds in [hd_share, hh_share, hd_merge, hh_merge, hd_noov, hh_noov]:
+            if arcpy.Exists(ds): arcpy.management.Delete(ds)
+    if arcpy.Exists(overlap): arcpy.management.Delete(overlap)
+    return hh_fin, hd_fin
+
+for p in [hawaiiana_fc, decipiens_fc, hawaiiana_mask, decipiens_mask, bay_fc]:
+    if not arcpy.Exists(p):
+        raise OSError(f"Missing dataset: {p}")
+
+out_history = create_history_fc(hawaiiana_fc, out_history)
+
+append_with_attrs(hawaiiana_fc, "hawaiiana", 0, START_DATE, out_history)
+append_with_attrs(decipiens_fc, "decipiens", 0, START_DATE, out_history)
+
+cur_hh = arcpy.management.CopyFeatures(hawaiiana_fc, u("hh_m0"))
+cur_hd = arcpy.management.CopyFeatures(decipiens_fc, u("hd_m0"))
+
+print(f"Starting {YEARS}-year monthly growth simulation ({MONTHS} months)…")
+for m in range(1, MONTHS + 1):
+    date = add_months(START_DATE, m)
+
+    if m % 1 == 0:
+        print(f"… Month {m} / {MONTHS}  ({date.isoformat()})")
+
+    hh_prop = grow_with_mask(cur_hh, GROW_HH * GRAZE, hawaiiana_mask, bay_fc, f"hh_{m}")
+    hd_prop = grow_with_mask(cur_hd, GROW_HD,         decipiens_mask, bay_fc, f"hd_{m}")
+
+    hh_final, hd_final = resolve_overlap(hh_prop, hd_prop, m)
+
+    append_with_attrs(hh_final, "hawaiiana", m, date, out_history)
+    append_with_attrs(hd_final,  "decipiens", m, date, out_history)
+
+    arcpy.management.Delete(cur_hh); arcpy.management.Delete(cur_hd)
+    cur_hh = arcpy.management.CopyFeatures(hh_final, u(f"hh_m{m}"))
+    cur_hd = arcpy.management.CopyFeatures(hd_final, u(f"hd_m{m}"))
+
+    for ds in [hh_prop, hd_prop, hh_final, hd_final]:
+        if arcpy.Exists(ds): arcpy.management.Delete(ds)
+
+    if m % 12 == 0:
+        print(f"Finished {m//12} year(s)")
+
+print("Monthly growth simulation complete")
+print("Output:", out_history)
