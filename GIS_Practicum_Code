@@ -14,7 +14,7 @@ out_history    = f"{gdb}\\Seagrass_Growth"
 # Converted from weekly edge-growth to monthly (×4.345 weeks/month)
 GROW_HH = 0.14818188   # H. hawaiiana edge-growth (m/month)
 GROW_HD = 0.5322625    # H. decipiens edge-growth (m/month)
-GRAZE   = 0.86         # uniform grazing multiplier per month for hawaiiana (14% reduction)
+GRAZE   = 0.9        # uniform grazing multiplier per month for hawaiiana (0.1 meters squared per day, or 10 percent)
 
 # Overlap
 PREF_HD = 0.65         # 65% of overlap goes to decipiens
