@@ -1,0 +1,87 @@
+## Prompt: Choose any tide gauge station from the UHSLC database.
+## http://uhslc.soest.hawaii.edu/opendap/fast/daily/d057.nc for the daily data
+## http://uhslc.soest.hawaii.edu/opendap/fast/hourly/h057.nc for hourly data.
+## https://uhslc.soest.hawaii.edu/data/ for station ID. 
+## Download its sea-level record (daily or hourly). 
+## Plot the full raw sea-level time series, making sure to remove or replace missing/outlier values. 
+## Then compute a linear sea-level trend using least squares, plot that trend line on the same graph, and include the numerical trend value as text on the figure.
+
+import numpy as np # for dealing with the numerical values in the dataset
+import pandas as pd # for helping with date/time values
+import matplotlib.pyplot as plt # for plotting
+import xarray as xr # for reading the dataset
+
+ds = xr.open_dataset("http://uhslc.soest.hawaii.edu/opendap/fast/daily/d050.nc")  # link to the dataset
+
+def decimal_year(dates: pd.DatetimeIndex) -> np.ndarray:
+    year = dates.year
+    start = pd.to_datetime(year.astype(str) + "-01-01")
+    # sets the start time of each year to January 1st
+    end   = pd.to_datetime((year + 1).astype(str) + "-01-01")
+    # sets the end time of each year to January 1st of the next year
+    return year + (dates - start) / (end - start)
+    # computers the fraction of the year that has passed for each date
+    # dates - start is the time since January 1
+    # end - start is the total length of that year
+    #  Produced a decminal year format that gives a numeric x-axis
+    # this makes our slope later easier to compute, since it's in "units per year"
+
+sea_1d = ds["sea_level"].squeeze(drop=True) # this pulls the variable sea_level from the dataset
+# squeeze(drop=True) is used because i kept getting errors
+# I think this removes data that doesn't have meaninfgul variation
+# so like if the data is station: 1, time: 28000, it removes the station axis
+for dim in sea_1d.dims: #this cycles through every dimension in the dataframe
+    if dim != "time": # if the dimension is not time
+        sea_1d = sea_1d.isel({dim: 0})  # pick the first index along non-time dimensions
+
+sea_level = sea_1d.values.astype(float).ravel()
+# this is an xarray DataArray
+
+time = pd.to_datetime(ds["time"].values) # converts the dataset time to pandas datetime format 
+
+# look for missing data
+fill_val = sea_1d.attrs.get("_FillValue", None) # looks inside the array to see if there are empty values
+if fill_val is not None: # if there is no fill value
+    sea_level = np.where(sea_level == fill_val, np.nan, sea_level) # fill with NAN
+
+# look for extreme negative numbers
+sea_level = np.where(sea_level < -9000, np.nan, sea_level)  # catch extreme negatives
+
+# Interpolation
+sea_series = pd.Series(sea_level, index=time)  # align sea level data with timestamps
+sea_clean = sea_series.interpolate(limit_direction="both")  # fill NaNs via linear interpolation across the line
+# uses neighboring datapoints 
+
+# set the x and y axis
+time_clean = sea_clean.index   # takes the datetime series from the cleaned sea level series
+y = sea_clean.to_numpy(dtype=float)                # converts the cleaned series to a plain numpy array of floats
+# to make plotting easier
+x = decimal_year(time_clean).to_numpy(dtype=float)  # takes decimal year values and converts to a numpy array
+# so it's easier to plot like the previous, y-axis data lol
+
+# --- Linear fit on cleaned data ---
+m, b = np.polyfit(x, y, 1) # fits a 1st degree polynomial data (1 is first degree) 
+trend_line = m * x + b  # evaluate on the same x used for fitting/plotting
+
+units = sea_1d.attrs.get("units", "units") # takes the units from the dataset to apply to the graph
+
+# --- Plot ---
+plt.figure(figsize=(12, 5)) # sets the figure size
+plt.plot(time, y, label="Sea Level") # plots the sea-level on the y-axis
+plt.plot(time, trend_line, linewidth=2, label=f"Linear Trend: {m:.2f} {units}/yr") # plots the trendline
+plt.title("Midway Atoll (UHSLC Station 050) — Daily Sea Level and Linear Trend") # plots the title
+plt.xlabel("Time") # labels the x-axis
+plt.ylabel(f"Sea Level ({units})") # labels the y-axis
+plt.grid(alpha=0.3) # plots the background grid and makes it translusent
+plt.legend() # plots the legend of the trend line and the sea level data
+
+plt.text(
+    time.min(),          # left edge
+    np.nanmax(y),        # top of graph, because it defaulted to the middle of the graph, and I couldn't read it
+    f"Linear Trend: {m:.2f} {units}/yr", # text that will appear
+    fontsize=9, weight="bold", color="orange", # orange matches the legend
+    va="top", ha="left" # aligns the text
+)
+
+plt.tight_layout() # makes the graph layout tight
+plt.show() # actually shows the graph
