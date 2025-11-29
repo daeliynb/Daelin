@@ -1,0 +1,52 @@
+## this Code picks a set amount of people from a list inputted below 
+## Orginally used for a class, so instead of people, it's students
+
+import random
+# import a class roster of students
+students = [ ]
+
+# I want this program to remove students from the list until there are no students left
+print("Student amount:", len(students))
+#lets the user know at the beginning how many students there are
+while True:
+    if len(students)== 0:  
+        #if the list is empty
+        print("No students left")
+        print("Please restart the kernel to reset the list")
+        #break stops the loop, so it doesn't print forever lol
+        break
+        
+    #ask user to input the amount of students
+    select_number = int(input("\nEnter how many students to select: "))
+    
+    #for when the selected number is over the amount of students left
+    #originally was gonna be passive aggressive in the response, but decided against it </3
+    if select_number > len(students):
+        print("\nNot enough students. Restart the kernel")
+        #break stops the loop, 
+        break
+
+    selected_students = []
+    #choses the students, and creates an empty list
+    #for 'i' in range selects the amount of students in selected number
+    for i in range(select_number):
+        chosen = random.choice(students)
+        #picks a name from the roster
+        selected_students.append(chosen)
+        #adds the chosen students to the list made above, to keep track of who's been picked
+        students.remove(chosen)
+        #removes the students from the list
+
+    print("\nSelected students:") 
+    #\n creates a new line, just so this doesn't look fugly
+    for idx, name in enumerate(selected_students, start=1):
+        #idx is the number the loop is on
+        #the start is 1 so the count doesn't start at 0, typical python rules
+        #enumerate pairs the selected students with a number to make a legible list
+        #also creates the variable 'name'
+        print(f"{idx}. {name}")
+            #prints the name in a list format, where it's #. [name]
+    print("\nRemaining students:", len(students))
+        #\n adds a new line to make this look not shitty
+
+        
