@@ -1,0 +1,159 @@
+## From my data science class; it's plotting data from a file
+## **Prompt**: The El Nino Southern Oscillation (ENSO) is a major interannual signal in the Pacific.  
+## There are several ways to measure ENSO, including using sea level pressure, sea level, etc.  The NOAA PSL has some plots using a Multi-variate Index at:
+## https://psl.noaa.gov/enso/mei.ext/index.html#data 
+## For this assignment, try make a plot of the six strongest events over the period 1870-1950.
+## Data can be found here:
+## https://psl.noaa.gov/enso/mei.ext/table.ext.html
+
+import numpy as np ## for numerical processes
+import pandas as pd ## for reading a table
+import matplotlib.pyplot as plt ## for plotting a graph
+import requests, io ##requests downloads the webpage to grab the text, since the page doesn't give a good CSV
+## io lets us treat the strings like files, since we want to use Pandas
+
+url = "https://psl.noaa.gov/enso/mei.ext/table.ext.html" ## Data we want
+txt = requests.get(url).text ## this downloads the page as a string
+
+lines = txt.splitlines() ## this splits the string (all the data we collected)
+## into a list of lines, and it loops.
+header_line = None #We don't know what line of text the header is on
+for i, line in enumerate(lines):
+    if line.strip().upper().startswith("YEAR"):
+        #line strip removes spaces, and .upper converts all letters to uppercase
+        # case-sensitivity is a thing, so let's just remove it!
+        # Stops the loop when we find "YEAR" to find the heading
+        header_line = i
+        break
+
+kept = [] # makes an empty list to store the wanted data from the text file
+for ln in lines[header_line:]: #loops through text starting at header line
+    s = ln.strip() #this removes unncessary spaces to make a good string
+    if not s: # if the line is empty...
+        if len(kept) > 10: #... and we've collected 10 lines previously of data
+            break #... then stop, we are probs at the end of the table lol
+        else:
+            continue
+    if s.upper().startswith("YEAR") or (len(s) >= 4 and s[:4].isdigit()):
+        kept.append(s) #If the line starts with YEAR (header)
+        # or if the line starts with 4 digits (a year) 
+        # we keep it to the list
+
+block = "\n".join(kept) #separates data by new-line in one string 
+#so pandas can read like a text file
+
+df = pd.read_csv(io.StringIO(block), sep=r"\s+", header=0)
+#df means data file
+#pandas reads the text (csv) file in BLOCK, as if it were a file
+# StringIO wraps the string into a block SO pandas can read it like a file
+#sep=r"\s+" splits the columns on spaces (one or more, hence the plus)
+
+df.columns = ["YEAR","Dec-Jan","Jan-Feb","Feb-Mar","Mar-Apr","Apr-May","May-Jun",
+              "Jun-Jul","Jul-Aug","Aug-Sep","Sep-Oct","Oct-Nov","Nov-Dec"]
+#sets the column names
+df["YEAR"] = pd.to_numeric(df["YEAR"])
+#Converts the year column in the dataframe to numbers
+
+df_early = df[(df["YEAR"] >= 1871) & (df["YEAR"] <= 1950)]
+# this selects the data in the time window we want, 1871 to 1950!
+
+months = ["Dec-Jan","Jan-Feb","Feb-Mar","Mar-Apr","Apr-May","May-Jun",
+          "Jun-Jul","Jul-Aug","Aug-Sep","Sep-Oct","Oct-Nov","Nov-Dec"]
+#this makes a list of the bimonthly periods, which we will loop through!
+def three_year_series(y): ## gives three year time series
+    val = [] # list to hold values!
+    for year in [y, y+1, y+2]: # initial year, plus the year after that
+        # and the year after that (3 years total!)
+        row = df_early[df_early["YEAR"] == year] 
+        # this pulls the row of data for those years from the data frame
+        val += [row.iloc[0][m] for m in months]
+        # thsee takes each bimonth MEI value in order, and adds them
+        # to the value list
+    return np.array(val, dtype=float)
+    # this converts the list to a NumPy array so we can plot it!
+
+events = [1877, 1888, 1904, 1925, 1929, 1939]
+# the six strongest ENSO events
+series = {y: three_year_series(y) for y in events}
+# for each event, the data from three_year_series for year 'y' will be chosen
+
+def stop_index(val):  # finds where to stop plotting
+    # after event returns to semi-normal conditions
+    # like seen in the graph on Lamaku
+    peak = np.argmax(np.abs(val)) # finds the largest absolute value
+    #where the event is strongest
+    for j in range(peak, len(val)): #checks values after peak
+        if abs(val[j]) < 0.25:    # If below threshold of 0.3, which we decided earlier
+            return j
+    return len(val) - 1 # if it never drops below 0.25, we stop at the end
+trim_x, trim_y = {}, {} #creates dictionaries
+for y in events: #loops through list of starting years
+    stop = min(stop_index(series[y]), 35) 
+    # series 6 is the full 3-year values
+    # stop_index is where we decided the event returns to normal
+    # 35 is the maximum index, as 0 to 35 is how python works, not 1 to 36
+    # min makes sure we don't go past the 3-year window
+    # stop is the final index we'll use
+    trim_x[y] = np.arange(stop+1) # creates x-axis values for each event (add 1 since python starts at 0)
+    trim_y[y] = series[y][:stop+1] # creates y-axis values plus 1 for python rules, using the series we created
+
+plt.figure(figsize=(13, 6)) # had to look this up
+# but when I did the regular figure, everything was condensed
+
+colors = ["red", "orange", "pink", "green", "blue", "purple"]
+# i want the colors of the events to be rainbow so that's what we're doing.
+
+# y-gridlines
+plt.yticks([-2, -1, 0, 1, 2, 3]) # these are the y-values I want to show
+plt.grid(axis="y", linestyle="--", alpha=0.6)
+# this is the y-axis labels, thus axis"y", I like dashed lines, so it's dashed
+# and let's make them transparent with alpha so visibility is easier
+
+plt.axhline(0, color="black", linewidth=1)
+# this draws a black line at y=0 to show the baseline
+
+
+plt.xticks([0, 6, 12, 18, 24, 30], # x labels
+           # this tells matplot to mark every 6 month periods, and replaces numbers with labels
+            ["Dec–Jan","Jun–Jul","Dec–Jan","Jun–Jul","Dec–Jan","Jun–Jul"])
+plt.xlim(0, 35) #36 biomonth points on x-axis
+plt.ylim(-2, 3) # decided bounds
+plt.ylabel("Standardized Departure") # stolen from Lamaku graph
+
+
+for i, y in enumerate(events): #loops through 6 events, i is the counter, and y is the year
+    plt.plot(trim_x[y], trim_y[y], 
+            # plot makes a line for the event, and the trims set the stop values
+             color=colors[i % len(colors)],
+             # this cycles through the 6 colors so it's in rainbow order!
+             linestyle="--", marker="o", linewidth=2, label=f"{y}+")
+            # sets the lines to be dashed, the data points to be marked with circles
+            # makes the line width larger than average to increase visibility
+            # and labels the legend entry with the starting year and a plus, like the lamaku graph
+    plt.text(trim_x[y][-1] + 0.3, trim_y[y][-1],
+            # writes the label next to the last data point. +0.3 shifts the text to the right,
+             # -1 places it in line with the last data point
+             f"{y}+", color=colors[i % len(colors)], fontsize=9, va="center")
+            # and va center centers the text vertically
+            # f"{y}+" combines the text and variable, so it has the year and a + after, like in the legend
+            # colors ensures the label color matches the line color 
+
+plt.legend( #creates a legend
+    title="Event (start year)", #title
+    bbox_to_anchor=(1.05, 1.0), #moved the legend outside the plot area
+    #1.05 moved it right, and 1 aligned the legend to the top of the graph
+    # had to do this so legend wouldn't sit on top of data
+    frameon=True, #draws a box around the legend
+    fontsize=9, # sets font size of legend to be smaller than legend title
+    title_fontsize=10 # sets legend title to be a bit larger
+)
+
+plt.title("Extended Multivariate ENSO Index (MEI.ext) for the 6 strongest \nEl Niño events between 1871 and 1949",
+          pad=12)
+# title of graph
+# pad gives distance between top of plot and the title
+# so it's more legible 
+
+
+plt.show()
+
