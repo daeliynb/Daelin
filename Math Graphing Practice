@@ -1,0 +1,92 @@
+## used for a data science class
+#### First one plots two trigonometric functions on a graph, second one tests the central limit theorem
+
+### Problem 1 ### ----------------------------------------
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+theta = np.linspace(0, 2*np.pi, 1000)
+# sets theta, which goes from 0 to 2pi. 
+# 1000 is the amount of intervals it's split into
+# 100 didn't make a smooth graph, so I just made it 1000
+# so that way the graph isn't fugly
+
+# Defining x and y
+x = 16 * (np.sin(theta)**3) #16*sin^3(theta)
+y = 13*np.cos(theta) - 5*np.cos(2*theta) - 2*np.cos(3*theta) - np.cos(4*theta)
+#13cos(theta)-5cos(2theta)-2cos(3theta)-cos(4theta)
+
+# plot the functions on the same graph
+# copied and pasted the theta symbol because there's only so much 
+# spelling out of theta a man can take
+plt.plot(theta, x, linestyle='dashed', color='r', label='x(θ) = 16·sin³(θ)')
+plt.plot(theta, y, linestyle='solid', color='b', label='y(θ) = 13cosθ - 5cos2θ - 2cos3θ - cos4θ')
+
+# tried putting these in different code blocks
+# but it didnt work so sorry this is so condensed
+# Labels of the graph, titles, legend, e.t.c
+plt.xlabel('θ (radians)')
+plt.ylabel('Function value')
+plt.title('Functions x(θ) and y(θ)')
+plt.legend(loc='best') # this tells matplotlib to try to not cover my data lol
+plt.grid(linestyle='dashdot', color='gray') # this is the coolest of the linestyles
+
+
+plt.show()
+# creates the plot
+
+
+### Problem 2 ### ----------------------------------------
+
+# okay this math might be super fucking clunky im sorry in advance
+avn = 1000 # take the average of 1000 numbers (average number)
+t = 1000 # 1000 times
+
+# i think there's a better way to do this but idk what it is
+means_list = [] # creates a list to store 1000 sample means
+
+for i in range(t):
+    numbers = np.random.rand(avn) # draws 1000 numbers
+    mean = np.mean(numbers) #takes the average of the numbers
+    means_list.append(mean) # stores the average
+
+sample_means = np.array(means_list) # turns list into an array so plotting
+# isn't as bad
+
+#okay, so here's where my math might get wrong
+# apparently a standard range to use is Uniform(0,1) because it stats it's easy to understand
+# Parameters for the analytical normal equation
+
+m_u = 0.5 # the mean of 0,1, the range we are using
+s_u = 1 / np.sqrt(12) # the standard deviation of 0,1
+sigma = s_u / np.sqrt(avn) # the standard deviation of the sample
+
+# the normal distribution curve, using the formula given
+# this will be fugly im sorry
+x = np.linspace(m_u - 4*sigma, m_u + 4*sigma, 200) # we chose 200 spaces along the x-axis to make the curve smooth
+# we will multiply by 4, because 99.9937% of data is coverd within +- 4sigma
+# that's the empirical rule/ 68 - 95 - 99.7 rule 
+# we could do 3, realistically, since it covers about 99.7% data, but i'm playing it safe
+y = (1 / (sigma * np.sqrt(2*np.pi))) * np.exp(-((x - m_u)**2) / (2 * sigma**2))
+# y values are calculated above by the analytic equation.
+
+plt.hist(sample_means, bins=25, alpha=0.75, density=True, label='Histogram of sample means')
+# sample_means is the list of the 1000 averages, bins splits x-axis into 25 bars, 
+# alpha=0.75 makes the bars-semi transparent, like we learned in class
+# label appears in legend
+# see markdown below for density explanation
+
+plt.plot(x, y, color='blue', linestyle='dotted', label='Analytic Normal Curve')
+# this plots the curve over the histogram
+
+# Axis title and labels
+plt.xlabel('Sample mean')
+plt.ylabel('Density')
+plt.title('Central Limit Theorem Test')
+plt.legend(loc='best') # chooses the best location where it won't overlap data
+plt.grid(linestyle='dotted')
+plt.show()
+
+
