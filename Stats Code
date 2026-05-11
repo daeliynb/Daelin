@@ -1,0 +1,345 @@
+## PACKAGES
+import numpy as np
+import pandas as pd
+from scipy import stats
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+from statsmodels.stats.multitest import multipletests
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+## LOADING AND CLEANING THE DATA
+df = pd.read_csv("HalHaw.csv").copy()
+df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", na=False)]
+
+## ADD COLUMN DEFINITIONS
+COL_TOTAL   = "Total Plants in Treatment"
+COL_GROWTH  = "Plants that Exhibited Growth"
+COL_CONTAM  = "Plants that Contaminated"
+FAC_STER    = "Sterilization Method"
+FAC_PPM     = "PPM"
+FAC_N       = "Nitrogen Source"
+FAC_SUC     = "Sucrose Concentration"
+FAC_SW      = "Seawater Concentration"
+FAC_BUF     = "Buffer"
+FAC_KIN     = "Kinetin"
+FAC_LEAVES  = "Leaves Kept"
+FAC_TRIAL   = "Trial #"
+
+## CLEAN THE FACTORS TO REMOVE AND RECLASSIFY NANs
+df[FAC_PPM] = df[FAC_PPM].notna().map({True: "Yes", False: "No"})
+df[FAC_BUF] = df[FAC_BUF].notna().map({True: "Yes", False: "No"})
+df[FAC_KIN] = df[FAC_KIN].notna().map({True: "Yes", False: "No"})
+
+## GROWTH AND CONTAMINATION RATES
+df["Growth Rate"] = df[COL_GROWTH] / df[COL_TOTAL]
+df["Contamination Rate"] = df[COL_CONTAM] / df[COL_TOTAL]
+
+## UNWEIGHTED SUMMARY STATS
+def summarize_by_factor(df, factor, value_col, metric_name):
+    summary = (
+        df.groupby(factor)[value_col]
+        .agg(
+            replicates="count",
+            mean="mean",
+            median="median",
+            std="std",
+            min="min",
+            max="max"
+        )
+        .reset_index()
+    )
+
+    summary = summary.rename(columns={factor: "level"})
+    summary.insert(0, "factor", factor)
+    summary.insert(1, "metric", metric_name)
+    summary = summary.sort_values(by="mean", ascending=False).reset_index(drop=True)
+
+    return summary
+
+## WEIGHTED SUMMARY STATS
+def summarize_weighted_by_factor(df, factor, metric_name):
+    summary = (
+        df.groupby(factor)
+        .agg(
+            replicates=(COL_TOTAL, "count"),
+            total_plants=(COL_TOTAL, "sum"),
+            total_growth=(COL_GROWTH, "sum"),
+            total_contam=(COL_CONTAM, "sum"),
+            growth_std=("Growth Rate", "std"),
+            contamination_std=("Contamination Rate", "std")
+        )
+        .reset_index()
+    )
+
+    summary["weighted_growth_rate"] = summary["total_growth"] / summary["total_plants"]
+    summary["weighted_contamination_rate"] = summary["total_contam"] / summary["total_plants"]
+
+    summary = summary.rename(columns={factor: "level"})
+    summary.insert(0, "factor", factor)
+    summary.insert(1, "metric", metric_name)
+
+    if metric_name == "Growth Rate":
+        summary = summary.sort_values(by="weighted_growth_rate", ascending=False)
+    elif metric_name == "Contamination Rate":
+        summary = summary.sort_values(by="weighted_contamination_rate", ascending=False)
+
+    summary = summary.reset_index(drop=True)
+
+    return summary
+
+## FACTORS
+growth_factors = [
+    FAC_PPM,
+    FAC_STER,
+    FAC_N,
+    FAC_SUC,
+    FAC_SW,
+    FAC_BUF,
+    FAC_KIN,
+    FAC_LEAVES,
+    FAC_TRIAL
+]
+
+contam_factors = [
+    FAC_PPM,
+    FAC_STER,
+    FAC_TRIAL
+]
+
+## BUILD UNWEIGHTED TABLES
+unweighted_tables = []
+
+for factor in growth_factors:
+    unweighted_tables.append(
+        summarize_by_factor(df, factor, "Growth Rate", "Growth Rate")
+    )
+
+for factor in contam_factors:
+    unweighted_tables.append(
+        summarize_by_factor(df, factor, "Contamination Rate", "Contamination Rate")
+    )
+
+unweighted_summary = pd.concat(unweighted_tables, ignore_index=True)
+
+## ADD OVERALL UNWEIGHTED ROWS
+overall_growth_unweighted = pd.DataFrame([{
+    "factor": "Overall",
+    "metric": "Growth Rate",
+    "level": "All Treatments",
+    "replicates": df["Growth Rate"].count(),
+    "mean": df["Growth Rate"].mean(),
+    "median": df["Growth Rate"].median(),
+    "std": df["Growth Rate"].std(),
+    "min": df["Growth Rate"].min(),
+    "max": df["Growth Rate"].max()
+}])
+
+overall_contam_unweighted = pd.DataFrame([{
+    "factor": "Overall",
+    "metric": "Contamination Rate",
+    "level": "All Treatments",
+    "replicates": df["Contamination Rate"].count(),
+    "mean": df["Contamination Rate"].mean(),
+    "median": df["Contamination Rate"].median(),
+    "std": df["Contamination Rate"].std(),
+    "min": df["Contamination Rate"].min(),
+    "max": df["Contamination Rate"].max()
+}])
+
+unweighted_summary = pd.concat(
+    [unweighted_summary, overall_growth_unweighted, overall_contam_unweighted],
+    ignore_index=True
+)
+
+## BUILD WEIGHTED TABLES
+weighted_tables = []
+
+for factor in growth_factors:
+    weighted_tables.append(
+        summarize_weighted_by_factor(df, factor, "Growth Rate")
+    )
+
+for factor in contam_factors:
+    weighted_tables.append(
+        summarize_weighted_by_factor(df, factor, "Contamination Rate")
+    )
+
+weighted_summary = pd.concat(weighted_tables, ignore_index=True)
+
+## ADD OVERALL WEIGHTED ROWS
+overall_weighted = pd.DataFrame([
+    {
+        "factor": "Overall",
+        "metric": "Growth Rate",
+        "level": "All Treatments",
+        "replicates": df[COL_TOTAL].count(),
+        "total_plants": df[COL_TOTAL].sum(),
+        "total_growth": df[COL_GROWTH].sum(),
+        "total_contam": df[COL_CONTAM].sum(),
+        "growth_std": df["Growth Rate"].std(),
+        "contamination_std": df["Contamination Rate"].std(),
+        "weighted_growth_rate": df[COL_GROWTH].sum() / df[COL_TOTAL].sum(),
+        "weighted_contamination_rate": df[COL_CONTAM].sum() / df[COL_TOTAL].sum()
+    },
+    {
+        "factor": "Overall",
+        "metric": "Contamination Rate",
+        "level": "All Treatments",
+        "replicates": df[COL_TOTAL].count(),
+        "total_plants": df[COL_TOTAL].sum(),
+        "total_growth": df[COL_GROWTH].sum(),
+        "total_contam": df[COL_CONTAM].sum(),
+        "growth_std": df["Growth Rate"].std(),
+        "contamination_std": df["Contamination Rate"].std(),
+        "weighted_growth_rate": df[COL_GROWTH].sum() / df[COL_TOTAL].sum(),
+        "weighted_contamination_rate": df[COL_CONTAM].sum() / df[COL_TOTAL].sum()
+    }
+])
+
+weighted_summary = pd.concat([weighted_summary, overall_weighted], ignore_index=True)
+
+## EXPORT TO CSV
+unweighted_summary.to_csv("Unweighted_Summary_Stats.csv", index=False)
+weighted_summary.to_csv("Weighted_Summary_Stats.csv", index=False)
+
+## POST HOC POWER ANALYSIS FOR BINOMIAL OUTCOMES
+from statsmodels.stats.power import NormalIndPower
+from statsmodels.stats.proportion import proportion_effectsize
+
+power_analysis = NormalIndPower()
+
+def run_two_proportion_power_analysis(df, factor, success_col, total_col, metric_name,
+                                      alpha=0.05, target_power=0.80):
+    results = []
+
+    levels = df[factor].dropna().unique()
+
+    for level in levels:
+        group_a = df[df[factor] == level]
+        group_b = df[df[factor] != level]
+
+        # TOTALS
+        success_a = group_a[success_col].sum()
+        total_a = group_a[total_col].sum()
+
+        success_b = group_b[success_col].sum()
+        total_b = group_b[total_col].sum()
+
+        if total_a == 0 or total_b == 0:
+            continue
+
+        prop_a = success_a / total_a
+        prop_b = success_b / total_b
+        diff = prop_a - prop_b
+
+        # EFFECT SIZE (H)
+        effect_size = proportion_effectsize(prop_a, prop_b)
+
+        # RATIO FOR POWER CALCULATION
+        ratio = total_b / total_a if total_a > 0 else np.nan
+
+        if np.isclose(effect_size, 0):
+            observed_power = np.nan
+            required_n = np.nan
+        else:
+            observed_power = power_analysis.power(
+                effect_size=abs(effect_size),
+                nobs1=total_a,
+                alpha=alpha,
+                ratio=ratio,
+                alternative='two-sided'
+            )
+
+            required_n = power_analysis.solve_power(
+                effect_size=abs(effect_size),
+                power=target_power,
+                alpha=alpha,
+                ratio=1.0,
+                alternative='two-sided'
+            )
+
+        results.append({
+            "Factor": factor,
+            "Treatment Level": level,
+            "Metric": metric_name,
+
+            "Successes_A": success_a,
+            "Total_A": total_a,
+            "Proportion_A": prop_a,
+
+            "Successes_B": success_b,
+            "Total_B": total_b,
+            "Proportion_B": prop_b,
+
+            "Difference (A-B)": diff,
+            "Abs_Difference": abs(diff),
+
+            "Effect_Size_Cohens_h": abs(effect_size),
+            "Observed_Power": observed_power,
+            "Required_n_per_group_80pct_power": np.ceil(required_n) if pd.notna(required_n) else np.nan
+        })
+
+    return pd.DataFrame(results)
+
+
+## FACTORS THAT CONTRIBUTED TO GROWTH
+growth_factors = [
+    FAC_PPM,
+    FAC_STER,
+    FAC_N,
+    FAC_SUC,
+    FAC_SW,
+    FAC_BUF,
+    FAC_KIN,
+    FAC_LEAVES,
+    FAC_TRIAL
+]
+
+## FACTORS THAT CONTRIBUTED TO CONTAMINATION
+contam_factors = [
+    FAC_PPM,
+    FAC_STER,
+    FAC_TRIAL
+]
+
+## RUN ANALYSIS
+all_results = []
+
+## TAKES GROWTH FACTORS AND RUNS ANALYSIS
+for factor in growth_factors:
+    res = run_two_proportion_power_analysis(
+        df=df,
+        factor=factor,
+        success_col=COL_GROWTH,
+        total_col=COL_TOTAL,
+        metric_name="Growth"
+    )
+    all_results.append(res)
+
+# TAKES CONTAMINATION FACTORS AND RUNS ANALYSIS
+for factor in contam_factors:
+    res = run_two_proportion_power_analysis(
+        df=df,
+        factor=factor,
+        success_col=COL_CONTAM,
+        total_col=COL_TOTAL,
+        metric_name="Contamination"
+    )
+    all_results.append(res)
+
+## COMBINE INTO ONE TABLE
+power_analysis_summary = pd.concat(all_results, ignore_index=True)
+
+## SORTS BY COMBINING METRIC FIRST (CONTAMINATION VS GROWTH) THEN BY FACTOR
+power_analysis_summary = power_analysis_summary.sort_values(
+    by=["Metric", "Factor", "Required_n_per_group_80pct_power"],
+    ascending=[True, True, False]
+).reset_index(drop=True)
+
+## SAVE SINGLE CSV WITH POWER ANALYSIS
+power_analysis_summary.to_csv("Posthoc_Power_Analysis.csv", index=False)
+
+## DISPLAY
+print("\n=== Post Hoc Power Analysis (Combined) ===")
+display(power_analysis_summary)
